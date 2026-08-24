@@ -1,6 +1,7 @@
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -33,7 +34,9 @@ enum HandlePosition {
 /// Interaction mode for the overlay
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum InteractionMode {
-    /// Initial state: drawing a new selection
+    /// Waiting for user to start drawing (initial state)
+    WaitingForDraw,
+    /// Drawing a new selection (after first mouse down)
     Drawing,
     /// Moving the selection rectangle
     Moving,
@@ -111,7 +114,7 @@ pub fn show_overlay(capture: ScreenCapture) {
         let state = Box::new(OverlayState {
             capture,
             selection: None,
-            mode: InteractionMode::Drawing,
+            mode: InteractionMode::WaitingForDraw,
             start_x: 0,
             start_y: 0,
             drag_offset_x: 0,
@@ -128,6 +131,8 @@ pub fn show_overlay(capture: ScreenCapture) {
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.message == WM_QUIT {
+                // Re-post WM_QUIT for the main loop (shouldn't happen, but be safe)
+                PostQuitMessage(msg.wParam.0 as i32);
                 break;
             }
             let _ = TranslateMessage(&msg);
@@ -191,7 +196,9 @@ unsafe extern "system" fn overlay_wnd_proc(
                 let _ = Box::from_raw(ptr);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
-            PostQuitMessage(0);
+            // Post a thread message to unblock GetMessageW so the local loop
+            // can detect that the window is gone and exit.
+            let _ = PostThreadMessageW(GetCurrentThreadId(), WM_NULL, WPARAM(0), LPARAM(0));
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -500,6 +507,9 @@ unsafe fn handle_mouse_move(hwnd: HWND, lparam: LPARAM) {
     let state = &mut *ptr;
 
     match state.mode {
+        InteractionMode::WaitingForDraw => {
+            // Do nothing - waiting for user to click
+        }
         InteractionMode::Drawing => {
             // Update selection rectangle from start point to current mouse
             let sx = state.start_x.min(x);
@@ -546,14 +556,26 @@ unsafe fn handle_mouse_up(hwnd: HWND, _lparam: LPARAM) {
     let state = &mut *ptr;
 
     match state.mode {
-        InteractionMode::Drawing | InteractionMode::Moving | InteractionMode::Resizing(_) => {
+        InteractionMode::Drawing => {
+            // First selection completed - if large enough, show the toolbar immediately
+            if let Some(sel) = state.selection {
+                if sel.width > 5 && sel.height > 5 {
+                    let _ = ReleaseCapture();
+                    // confirm_selection will destroy the overlay and show toolbar
+                    confirm_selection(hwnd);
+                    return;
+                }
+            }
             state.mode = InteractionMode::Idle;
-            // Release mouse capture so cursor changes work on hover and other
-            // windows can receive input if the user clicks outside the overlay.
             let _ = ReleaseCapture();
             invalidate_window(hwnd);
         }
-        _ => {}
+        InteractionMode::Moving | InteractionMode::Resizing(_) => {
+            state.mode = InteractionMode::Idle;
+            let _ = ReleaseCapture();
+            invalidate_window(hwnd);
+        }
+        InteractionMode::WaitingForDraw | InteractionMode::Idle => {}
     }
 }
 

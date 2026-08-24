@@ -26,6 +26,7 @@ features = [
     "Win32_System_Ole",
     "Win32_UI_Controls",
     "Win32_UI_Controls_Dialogs",
+    "Win32_System_Threading",
 ]
 
 [profile.release]
