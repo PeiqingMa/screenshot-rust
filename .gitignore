@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+*.pdb
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Config files generated at runtime
+rustshot_config.json

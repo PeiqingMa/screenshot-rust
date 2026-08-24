@@ -1,0 +1,482 @@
+use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+use crate::annotation::{AnnotationEngine, AnnotationTool};
+
+/// Toolbar button IDs
+const BTN_RECTANGLE: u32 = 2001;
+const BTN_ARROW: u32 = 2002;
+const BTN_PEN: u32 = 2003;
+const BTN_HIGHLIGHTER: u32 = 2004;
+const BTN_MOSAIC: u32 = 2005;
+const BTN_TEXT: u32 = 2006;
+const BTN_UNDO: u32 = 2007;
+const BTN_REDO: u32 = 2008;
+const BTN_CLOSE: u32 = 2009;
+const BTN_PIN: u32 = 2010;
+const BTN_SAVE: u32 = 2011;
+const BTN_COPY: u32 = 2012;
+const BTN_COLOR: u32 = 2013;
+
+/// Toolbar button definition
+struct ToolbarButton {
+    id: u32,
+    label: &'static str,
+    tooltip: &'static str,
+}
+
+/// All toolbar buttons in order
+const BUTTONS: &[ToolbarButton] = &[
+    ToolbarButton { id: BTN_RECTANGLE, label: "\u{25AD}", tooltip: "Rectangle" },
+    ToolbarButton { id: BTN_ARROW, label: "\u{2191}", tooltip: "Arrow" },
+    ToolbarButton { id: BTN_PEN, label: "\u{270F}", tooltip: "Pen" },
+    ToolbarButton { id: BTN_HIGHLIGHTER, label: "\u{1F58C}", tooltip: "Highlighter" },
+    ToolbarButton { id: BTN_MOSAIC, label: "\u{2593}", tooltip: "Mosaic" },
+    ToolbarButton { id: BTN_TEXT, label: "T", tooltip: "Text" },
+    ToolbarButton { id: BTN_UNDO, label: "\u{21B6}", tooltip: "Undo" },
+    ToolbarButton { id: BTN_REDO, label: "\u{21B7}", tooltip: "Redo" },
+    ToolbarButton { id: BTN_CLOSE, label: "\u{2715}", tooltip: "Close" },
+    ToolbarButton { id: BTN_PIN, label: "\u{1F4CC}", tooltip: "Pin to Screen" },
+    ToolbarButton { id: BTN_SAVE, label: "\u{1F4BE}", tooltip: "Save" },
+    ToolbarButton { id: BTN_COPY, label: "\u{1F4CB}", tooltip: "Copy" },
+    ToolbarButton { id: BTN_COLOR, label: "\u{25CF}", tooltip: "Color Picker" },
+];
+
+/// Toolbar button dimensions
+const BTN_WIDTH: i32 = 32;
+const BTN_HEIGHT: i32 = 32;
+const TOOLBAR_PADDING: i32 = 4;
+const TOOLBAR_HEIGHT: i32 = BTN_HEIGHT + TOOLBAR_PADDING * 2;
+
+/// Toolbar state
+struct ToolbarState {
+    image_data: Vec<u8>,
+    image_width: i32,
+    image_height: i32,
+    annotation_engine: AnnotationEngine,
+    current_tool: AnnotationTool,
+    current_color: COLORREF,
+    pinned: bool,
+    canvas_hwnd: HWND,
+}
+
+/// Show the annotation toolbar and canvas for the captured region
+pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
+    unsafe {
+        let instance = GetModuleHandleW(None).expect("Failed to get module handle");
+
+        // Register toolbar window class
+        let toolbar_class = windows::core::w!("RustShotToolbarClass");
+        let canvas_class = windows::core::w!("RustShotCanvasClass");
+
+        let wc_toolbar = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(toolbar_wnd_proc),
+            hInstance: instance.into(),
+            lpszClassName: toolbar_class,
+            hbrBackground: CreateSolidBrush(COLORREF(0x00383838)),
+            ..Default::default()
+        };
+
+        let wc_canvas = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(canvas_wnd_proc),
+            hInstance: instance.into(),
+            lpszClassName: canvas_class,
+            hCursor: LoadCursorW(None, IDC_CROSS).ok(),
+            ..Default::default()
+        };
+
+        RegisterClassExW(&wc_toolbar);
+        RegisterClassExW(&wc_canvas);
+
+        // Position the canvas and toolbar centered on screen
+        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        let canvas_x = (screen_width - width) / 2;
+        let canvas_y = (screen_height - height - TOOLBAR_HEIGHT - 8) / 2;
+
+        // Create canvas window (shows the captured image + annotations)
+        let canvas_hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            canvas_class,
+            windows::core::w!("RustShot Canvas"),
+            WS_POPUP | WS_VISIBLE | WS_BORDER,
+            canvas_x,
+            canvas_y,
+            width,
+            height,
+            None,
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .expect("Failed to create canvas window");
+
+        // Create toolbar window below the canvas
+        let toolbar_width = BUTTONS.len() as i32 * BTN_WIDTH + TOOLBAR_PADDING * 2;
+        let toolbar_x = canvas_x + (width - toolbar_width) / 2;
+        let toolbar_y = canvas_y + height + 4;
+
+        let toolbar_hwnd = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            toolbar_class,
+            windows::core::w!("RustShot Toolbar"),
+            WS_POPUP | WS_VISIBLE,
+            toolbar_x,
+            toolbar_y,
+            toolbar_width,
+            TOOLBAR_HEIGHT,
+            None,
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .expect("Failed to create toolbar window");
+
+        // Create shared state
+        let state = Box::new(ToolbarState {
+            image_data,
+            image_width: width,
+            image_height: height,
+            annotation_engine: AnnotationEngine::new(),
+            current_tool: AnnotationTool::Rectangle,
+            current_color: COLORREF(0x000000FF), // Red in BGR
+            pinned: false,
+            canvas_hwnd,
+        });
+        let state_ptr = Box::into_raw(state);
+
+        // Store state in both windows
+        SetWindowLongPtrW(toolbar_hwnd, GWLP_USERDATA, state_ptr as isize);
+        SetWindowLongPtrW(canvas_hwnd, GWLP_USERDATA, state_ptr as isize);
+
+        ShowWindow(canvas_hwnd, SW_SHOW);
+        ShowWindow(toolbar_hwnd, SW_SHOW);
+
+        // Message loop for toolbar/canvas windows
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+
+            // Break if both windows are destroyed
+            if !IsWindow(Some(toolbar_hwnd)).as_bool() && !IsWindow(Some(canvas_hwnd)).as_bool() {
+                break;
+            }
+        }
+
+        // Cleanup state (only if not already freed)
+        if !state_ptr.is_null() {
+            let _ = Box::from_raw(state_ptr);
+        }
+    }
+}
+
+/// Toolbar window procedure
+unsafe extern "system" fn toolbar_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            paint_toolbar(hwnd);
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            handle_toolbar_click(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Canvas window procedure (for drawing annotations)
+unsafe extern "system" fn canvas_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            paint_canvas(hwnd);
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            handle_canvas_mouse_down(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            handle_canvas_mouse_move(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            handle_canvas_mouse_up(hwnd, lparam);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Paint the toolbar with button icons
+unsafe fn paint_toolbar(hwnd: HWND) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+
+    // Draw background
+    let bg_brush = CreateSolidBrush(COLORREF(0x00383838));
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect).ok();
+    FillRect(hdc, &rect, bg_brush);
+    let _ = DeleteObject(bg_brush);
+
+    // Draw buttons
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, COLORREF(0x00FFFFFF)); // White text
+
+    for (i, button) in BUTTONS.iter().enumerate() {
+        let bx = TOOLBAR_PADDING + i as i32 * BTN_WIDTH;
+        let by = TOOLBAR_PADDING;
+
+        // Highlight active tool
+        if !ptr.is_null() {
+            let state = &*ptr;
+            let is_active = match button.id {
+                BTN_RECTANGLE => state.current_tool == AnnotationTool::Rectangle,
+                BTN_ARROW => state.current_tool == AnnotationTool::Arrow,
+                BTN_PEN => state.current_tool == AnnotationTool::Pen,
+                BTN_HIGHLIGHTER => state.current_tool == AnnotationTool::Highlighter,
+                BTN_MOSAIC => state.current_tool == AnnotationTool::Mosaic,
+                BTN_TEXT => state.current_tool == AnnotationTool::Text,
+                _ => false,
+            };
+
+            if is_active {
+                let active_brush = CreateSolidBrush(COLORREF(0x00666666));
+                let active_rect = RECT {
+                    left: bx,
+                    top: by,
+                    right: bx + BTN_WIDTH,
+                    bottom: by + BTN_HEIGHT,
+                };
+                FillRect(hdc, &active_rect, active_brush);
+                let _ = DeleteObject(active_brush);
+            }
+
+            // Special color for the color picker button
+            if button.id == BTN_COLOR {
+                SetTextColor(hdc, state.current_color);
+            }
+        }
+
+        // Draw button label
+        let label_wide: Vec<u16> = button.label.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut btn_rect = RECT {
+            left: bx,
+            top: by,
+            right: bx + BTN_WIDTH,
+            bottom: by + BTN_HEIGHT,
+        };
+        DrawTextW(
+            hdc,
+            &mut label_wide[..label_wide.len() - 1].to_vec(),
+            &mut btn_rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+
+        // Reset text color after color button
+        if !ptr.is_null() {
+            let state = &*ptr;
+            if button.id == BTN_COLOR {
+                SetTextColor(hdc, COLORREF(0x00FFFFFF));
+            }
+            let _ = state;
+        }
+    }
+
+    EndPaint(hwnd, &ps);
+}
+
+/// Paint the canvas (captured image + annotations)
+unsafe fn paint_canvas(hwnd: HWND) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+    if ptr.is_null() {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+    let state = &*ptr;
+
+    // Draw the base captured image
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: state.image_width,
+            biHeight: -state.image_height, // Top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    SetDIBitsToDevice(
+        hdc,
+        0,
+        0,
+        state.image_width as u32,
+        state.image_height as u32,
+        0,
+        0,
+        0,
+        state.image_height as u32,
+        state.image_data.as_ptr() as *const _,
+        &bmi,
+        DIB_RGB_COLORS,
+    );
+
+    // Draw all annotations on top
+    state.annotation_engine.render(hdc);
+
+    EndPaint(hwnd, &ps);
+}
+
+/// Handle toolbar button clicks
+unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+    if ptr.is_null() {
+        return;
+    }
+    let state = &mut *ptr;
+
+    // Determine which button was clicked
+    let btn_index = (x - TOOLBAR_PADDING) / BTN_WIDTH;
+    if btn_index < 0 || btn_index >= BUTTONS.len() as i32 {
+        return;
+    }
+
+    let button_id = BUTTONS[btn_index as usize].id;
+
+    match button_id {
+        BTN_RECTANGLE => state.current_tool = AnnotationTool::Rectangle,
+        BTN_ARROW => state.current_tool = AnnotationTool::Arrow,
+        BTN_PEN => state.current_tool = AnnotationTool::Pen,
+        BTN_HIGHLIGHTER => state.current_tool = AnnotationTool::Highlighter,
+        BTN_MOSAIC => state.current_tool = AnnotationTool::Mosaic,
+        BTN_TEXT => state.current_tool = AnnotationTool::Text,
+        BTN_UNDO => {
+            state.annotation_engine.undo();
+            InvalidateRect(Some(state.canvas_hwnd), None, true);
+        }
+        BTN_REDO => {
+            state.annotation_engine.redo();
+            InvalidateRect(Some(state.canvas_hwnd), None, true);
+        }
+        BTN_CLOSE => {
+            DestroyWindow(state.canvas_hwnd).ok();
+            DestroyWindow(hwnd).ok();
+            return;
+        }
+        BTN_PIN => {
+            state.pinned = !state.pinned;
+            // Pin removes the toolbar and makes canvas always-on-top
+        }
+        BTN_SAVE => {
+            let final_image = state.annotation_engine.composite(
+                &state.image_data,
+                state.image_width,
+                state.image_height,
+            );
+            crate::save::save_image(&final_image, state.image_width, state.image_height);
+        }
+        BTN_COPY => {
+            let final_image = state.annotation_engine.composite(
+                &state.image_data,
+                state.image_width,
+                state.image_height,
+            );
+            crate::clipboard::copy_to_clipboard(&final_image, state.image_width, state.image_height);
+        }
+        BTN_COLOR => {
+            // Cycle through common colors
+            state.current_color = match state.current_color.0 {
+                0x000000FF => COLORREF(0x0000FF00), // Red -> Green
+                0x0000FF00 => COLORREF(0x00FF0000), // Green -> Blue
+                0x00FF0000 => COLORREF(0x0000FFFF), // Blue -> Yellow
+                0x0000FFFF => COLORREF(0x00FFFFFF), // Yellow -> White
+                _ => COLORREF(0x000000FF),          // Default to Red
+            };
+        }
+        _ => {}
+    }
+
+    // Repaint toolbar to show active tool
+    InvalidateRect(Some(hwnd), None, true);
+}
+
+/// Handle mouse down on canvas for drawing
+unsafe fn handle_canvas_mouse_down(hwnd: HWND, lparam: LPARAM) {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+    if ptr.is_null() {
+        return;
+    }
+    let state = &mut *ptr;
+
+    state.annotation_engine.begin_stroke(state.current_tool, state.current_color, x, y);
+    let _ = SetCapture(hwnd);
+}
+
+/// Handle mouse move on canvas for drawing
+unsafe fn handle_canvas_mouse_move(hwnd: HWND, lparam: LPARAM) {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+    if ptr.is_null() {
+        return;
+    }
+    let state = &mut *ptr;
+
+    if state.annotation_engine.is_drawing() {
+        state.annotation_engine.continue_stroke(x, y);
+        InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
+/// Handle mouse up on canvas for drawing
+unsafe fn handle_canvas_mouse_up(hwnd: HWND, lparam: LPARAM) {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+    if ptr.is_null() {
+        return;
+    }
+    let state = &mut *ptr;
+
+    state.annotation_engine.end_stroke(x, y);
+    ReleaseCapture().ok();
+    InvalidateRect(Some(hwnd), None, false);
+}
