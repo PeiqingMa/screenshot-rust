@@ -120,9 +120,9 @@ pub fn show_overlay(capture: ScreenCapture) {
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-        ShowWindow(hwnd, SW_SHOW);
+        let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
-        SetForegroundWindow(hwnd);
+        let _ = SetForegroundWindow(hwnd);
         SetCapture(hwnd);
 
         // Local message loop for the overlay
@@ -207,7 +207,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
 
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OverlayState;
     if ptr.is_null() {
-        EndPaint(hwnd, &ps);
+        let _ = EndPaint(hwnd, &ps);
         return;
     }
     let state = &*ptr;
@@ -263,7 +263,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
     let hdc_dim = CreateCompatibleDC(hdc_mem);
     let hbm_dim = CreateCompatibleBitmap(hdc_mem, width, height);
     let old_dim = SelectObject(hdc_dim, hbm_dim);
-    FillRect(hdc_dim, &full_rect, dim_brush);
+    let _ = FillRect(hdc_dim, &full_rect, dim_brush);
 
     // Alpha blend the dim layer onto the screenshot
     let blend = BLENDFUNCTION {
@@ -273,7 +273,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
         AlphaFormat: 0,
     };
 
-    AlphaBlend(
+    let _ = AlphaBlend(
         hdc_mem,
         0,
         0,
@@ -317,7 +317,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
             let null_brush = GetStockObject(NULL_BRUSH);
             let old_brush_sel = SelectObject(hdc_mem, null_brush);
 
-            Rectangle(
+            let _ = Rectangle(
                 hdc_mem,
                 sel.x,
                 sel.y,
@@ -344,7 +344,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
     let _ = DeleteObject(hbitmap);
     let _ = DeleteDC(hdc_mem);
 
-    EndPaint(hwnd, &ps);
+    let _ = EndPaint(hwnd, &ps);
 }
 
 /// Draw resize handles as blue circles
@@ -356,7 +356,7 @@ unsafe fn draw_handles(hdc: HDC, sel: &SelectionRect) {
 
     let handles = get_handle_positions(sel);
     for (hx, hy) in handles {
-        Ellipse(
+        let _ = Ellipse(
             hdc,
             hx - HANDLE_RADIUS,
             hy - HANDLE_RADIUS,
@@ -406,7 +406,7 @@ unsafe fn draw_dimensions_label(hdc: HDC, sel: &SelectionRect) {
         right: label_x + (text.len() as i32) * 8 + 12,
         bottom: label_y + 20,
     };
-    FillRect(hdc, &label_rect, bg_brush);
+    let _ = FillRect(hdc, &label_rect, bg_brush);
     let _ = DeleteObject(bg_brush);
 
     // Draw text
@@ -559,7 +559,7 @@ unsafe fn cancel_overlay(hwnd: HWND) {
 
 /// Invalidate the entire overlay window to trigger repaint
 unsafe fn invalidate_window(hwnd: HWND) {
-    InvalidateRect(hwnd, None, BOOL::from(false));
+    let _ = InvalidateRect(hwnd, None, BOOL::from(false));
 }
 
 /// Hit-test which handle (if any) the mouse is over

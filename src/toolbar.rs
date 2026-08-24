@@ -25,6 +25,7 @@ const BTN_COLOR: u32 = 2013;
 struct ToolbarButton {
     id: u32,
     label: &'static str,
+    #[allow(dead_code)]
     tooltip: &'static str,
 }
 
@@ -61,6 +62,7 @@ struct ToolbarState {
     current_color: COLORREF,
     pinned: bool,
     canvas_hwnd: HWND,
+    #[allow(dead_code)]
     toolbar_hwnd: HWND,
 }
 
@@ -157,8 +159,8 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
         SetWindowLongPtrW(toolbar_hwnd, GWLP_USERDATA, state_ptr as isize);
         SetWindowLongPtrW(canvas_hwnd, GWLP_USERDATA, state_ptr as isize);
 
-        ShowWindow(canvas_hwnd, SW_SHOW);
-        ShowWindow(toolbar_hwnd, SW_SHOW);
+        let _ = ShowWindow(canvas_hwnd, SW_SHOW);
+        let _ = ShowWindow(toolbar_hwnd, SW_SHOW);
 
         // Message loop for toolbar/canvas windows
         let mut msg = MSG::default();
@@ -314,7 +316,7 @@ unsafe fn paint_toolbar(hwnd: HWND) {
         }
     }
 
-    EndPaint(hwnd, &ps);
+    let _ = EndPaint(hwnd, &ps);
 }
 
 /// Paint the canvas (captured image + annotations)
@@ -324,7 +326,7 @@ unsafe fn paint_canvas(hwnd: HWND) {
 
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
     if ptr.is_null() {
-        EndPaint(hwnd, &ps);
+        let _ = EndPaint(hwnd, &ps);
         return;
     }
     let state = &*ptr;
@@ -361,7 +363,7 @@ unsafe fn paint_canvas(hwnd: HWND) {
     // Draw all annotations on top
     state.annotation_engine.render(hdc);
 
-    EndPaint(hwnd, &ps);
+    let _ = EndPaint(hwnd, &ps);
 }
 
 /// Handle toolbar button clicks
@@ -391,11 +393,11 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
         BTN_TEXT => state.current_tool = AnnotationTool::Text,
         BTN_UNDO => {
             state.annotation_engine.undo();
-            InvalidateRect(state.canvas_hwnd, None, BOOL::from(true));
+            let _ = InvalidateRect(state.canvas_hwnd, None, BOOL::from(true));
         }
         BTN_REDO => {
             state.annotation_engine.redo();
-            InvalidateRect(state.canvas_hwnd, None, BOOL::from(true));
+            let _ = InvalidateRect(state.canvas_hwnd, None, BOOL::from(true));
         }
         BTN_CLOSE => {
             let canvas = state.canvas_hwnd;
@@ -438,7 +440,7 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
     }
 
     // Repaint toolbar to show active tool
-    InvalidateRect(hwnd, None, BOOL::from(true));
+    let _ = InvalidateRect(hwnd, None, BOOL::from(true));
 }
 
 /// Handle mouse down on canvas for drawing
@@ -469,7 +471,7 @@ unsafe fn handle_canvas_mouse_move(hwnd: HWND, lparam: LPARAM) {
 
     if state.annotation_engine.is_drawing() {
         state.annotation_engine.continue_stroke(x, y);
-        InvalidateRect(hwnd, None, BOOL::from(false));
+        let _ = InvalidateRect(hwnd, None, BOOL::from(false));
     }
 }
 
@@ -503,7 +505,7 @@ unsafe fn handle_canvas_mouse_up(hwnd: HWND, lparam: LPARAM) {
     }
 
     let _ = ReleaseCapture();
-    InvalidateRect(hwnd, None, BOOL::from(false));
+    let _ = InvalidateRect(hwnd, None, BOOL::from(false));
 }
 
 /// User-defined message posted by the text dialog's wndproc when WM_COMMAND is received.
@@ -607,7 +609,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         70,
         28,
         dlg,
-        HMENU(1isize as *mut _),
+        HMENU(std::ptr::dangling_mut()),
         instance,
         None,
     );

@@ -236,7 +236,7 @@ unsafe fn render_rectangle(hdc: HDC, annotation: &Annotation) {
     let null_brush = GetStockObject(NULL_BRUSH);
     let old_brush = SelectObject(hdc, null_brush);
 
-    Rectangle(hdc, start.x, start.y, end.x, end.y);
+    let _ = Rectangle(hdc, start.x, start.y, end.x, end.y);
 
     SelectObject(hdc, old_pen);
     SelectObject(hdc, old_brush);
@@ -256,8 +256,8 @@ unsafe fn render_arrow(hdc: HDC, annotation: &Annotation) {
     let old_pen = SelectObject(hdc, pen);
 
     // Draw the line
-    MoveToEx(hdc, start.x, start.y, None);
-    LineTo(hdc, end.x, end.y);
+    let _ = MoveToEx(hdc, start.x, start.y, None);
+    let _ = LineTo(hdc, end.x, end.y);
 
     // Draw arrowhead
     let dx = (end.x - start.x) as f64;
@@ -274,10 +274,10 @@ unsafe fn render_arrow(hdc: HDC, annotation: &Annotation) {
         let x2 = end.x as f64 - arrow_size * (angle + arrow_angle).cos();
         let y2 = end.y as f64 - arrow_size * (angle + arrow_angle).sin();
 
-        MoveToEx(hdc, end.x, end.y, None);
-        LineTo(hdc, x1 as i32, y1 as i32);
-        MoveToEx(hdc, end.x, end.y, None);
-        LineTo(hdc, x2 as i32, y2 as i32);
+        let _ = MoveToEx(hdc, end.x, end.y, None);
+        let _ = LineTo(hdc, x1 as i32, y1 as i32);
+        let _ = MoveToEx(hdc, end.x, end.y, None);
+        let _ = LineTo(hdc, x2 as i32, y2 as i32);
     }
 
     SelectObject(hdc, old_pen);
@@ -320,9 +320,9 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
         let pen = CreatePen(PS_SOLID, width, annotation.color);
         let old_pen = SelectObject(hdc_temp, pen);
 
-        MoveToEx(hdc_temp, annotation.points[0].x - min_x, annotation.points[0].y - min_y, None);
+        let _ = MoveToEx(hdc_temp, annotation.points[0].x - min_x, annotation.points[0].y - min_y, None);
         for point in &annotation.points[1..] {
-            LineTo(hdc_temp, point.x - min_x, point.y - min_y);
+            let _ = LineTo(hdc_temp, point.x - min_x, point.y - min_y);
         }
 
         SelectObject(hdc_temp, old_pen);
@@ -338,7 +338,7 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
             AlphaFormat: 0,
         };
 
-        AlphaBlend(
+        let _ = AlphaBlend(
             hdc,
             min_x,
             min_y,
@@ -359,9 +359,9 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
         let pen = CreatePen(PS_SOLID, width, annotation.color);
         let old_pen = SelectObject(hdc, pen);
 
-        MoveToEx(hdc, annotation.points[0].x, annotation.points[0].y, None);
+        let _ = MoveToEx(hdc, annotation.points[0].x, annotation.points[0].y, None);
         for point in &annotation.points[1..] {
-            LineTo(hdc, point.x, point.y);
+            let _ = LineTo(hdc, point.x, point.y);
         }
 
         SelectObject(hdc, old_pen);
@@ -490,7 +490,7 @@ unsafe fn render_text(hdc: HDC, annotation: &Annotation) {
     SetTextColor(hdc, annotation.color);
 
     let start = &annotation.points[0];
-    TextOutW(
+    let _ = TextOutW(
         hdc,
         start.x,
         start.y,

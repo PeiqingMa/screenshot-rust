@@ -12,6 +12,7 @@ const ID_MENU_EXIT: u32 = 1004;
 
 /// System tray icon manager
 pub struct TrayIcon {
+    #[allow(dead_code)]
     hwnd: HWND,
     nid: NOTIFYICONDATAW,
 }
@@ -37,7 +38,7 @@ impl TrayIcon {
         // Load default application icon
         unsafe {
             nid.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
-            Shell_NotifyIconW(NIM_ADD, &nid);
+            let _ = Shell_NotifyIconW(NIM_ADD, &nid);
         }
 
         Self { hwnd, nid }
@@ -46,7 +47,7 @@ impl TrayIcon {
     /// Remove the tray icon
     fn remove(&mut self) {
         unsafe {
-            Shell_NotifyIconW(NIM_DELETE, &self.nid);
+            let _ = Shell_NotifyIconW(NIM_DELETE, &self.nid);
         }
     }
 }
@@ -90,9 +91,9 @@ fn show_context_menu(hwnd: HWND) {
         let _ = GetCursorPos(&mut point);
 
         // Required to make menu disappear when clicking outside
-        SetForegroundWindow(hwnd);
+        let _ = SetForegroundWindow(hwnd);
 
-        TrackPopupMenu(
+        let _ = TrackPopupMenu(
             menu,
             TPM_RIGHTBUTTON,
             point.x,

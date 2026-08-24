@@ -61,7 +61,7 @@ fn create_main_window() -> HWND {
 
         RegisterClassExW(&wc);
 
-        let hwnd = CreateWindowExW(
+        CreateWindowExW(
             WS_EX_TOOLWINDOW, // No taskbar icon
             class_name,
             windows::core::w!("RustShot"),
@@ -75,9 +75,7 @@ fn create_main_window() -> HWND {
             instance,
             None,
         )
-        .expect("Failed to create main window");
-
-        hwnd
+        .expect("Failed to create main window")
     }
 }
 

@@ -89,6 +89,7 @@ impl Config {
     }
 
     /// Save current configuration to disk
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::config_path();
         let content = serde_json::to_string_pretty(self)?;

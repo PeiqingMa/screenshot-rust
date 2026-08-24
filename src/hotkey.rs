@@ -52,6 +52,7 @@ impl HotkeyManager {
     }
 
     /// Unregister the hotkey and re-register with a new binding
+    #[allow(dead_code)]
     pub fn update(&mut self, binding: &HotkeyBinding) {
         self.unregister();
 
@@ -93,6 +94,7 @@ impl HotkeyManager {
     }
 
     /// Convert a HOT_KEY_MODIFIERS value to human-readable string
+    #[allow(dead_code)]
     pub fn modifiers_to_string(modifiers: HOT_KEY_MODIFIERS) -> String {
         let mut parts = Vec::new();
         if modifiers.contains(MOD_CONTROL) {

@@ -125,7 +125,7 @@ pub fn crop_region(capture: &ScreenCapture, x: i32, y: i32, w: i32, h: i32) -> V
     for row in y..(y + h) {
         if row < 0 || row >= capture.height {
             // Fill with black for out-of-bounds rows
-            cropped.extend(std::iter::repeat(0u8).take((w * 4) as usize));
+            cropped.extend(std::iter::repeat_n(0u8, (w * 4) as usize));
             continue;
         }
         for col in x..(x + w) {

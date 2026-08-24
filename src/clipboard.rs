@@ -67,7 +67,7 @@ pub fn copy_to_clipboard(pixels: &[u8], width: i32, height: i32) {
             pixel_data_size,
         );
 
-        GlobalUnlock(hglobal);
+        let _ = GlobalUnlock(hglobal);
 
         // Set clipboard data as CF_DIB
         let result = SetClipboardData(CF_DIB.0 as u32, HANDLE(hglobal.0));
