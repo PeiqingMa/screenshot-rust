@@ -54,12 +54,19 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Get the configuration file path (next to the executable)
+    /// Get the configuration file path (in %APPDATA%\RustShot\)
     fn config_path() -> PathBuf {
-        let mut path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-        path.pop();
-        path.push("rustshot_config.json");
-        path
+        let base = std::env::var("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let mut path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+                path.pop();
+                path
+            });
+        let dir = base.join("RustShot");
+        // Ensure directory exists (ignore error if it already does)
+        let _ = fs::create_dir_all(&dir);
+        dir.join("config.json")
     }
 
     /// Load configuration from disk, or return defaults if file doesn't exist

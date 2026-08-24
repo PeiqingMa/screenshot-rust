@@ -88,6 +88,19 @@ impl AnnotationEngine {
         self.drawing = false;
     }
 
+    /// End the current stroke with associated text (for Text tool)
+    pub fn end_stroke_with_text(&mut self, x: i32, y: i32, text: String) {
+        if let Some(mut annotation) = self.current.take() {
+            annotation.points.push(Point { x, y });
+            annotation.text = Some(text);
+            if annotation.points.len() >= 2 {
+                self.annotations.push(annotation);
+                self.redo_stack.clear();
+            }
+        }
+        self.drawing = false;
+    }
+
     /// Undo the last annotation
     pub fn undo(&mut self) {
         if let Some(annotation) = self.annotations.pop() {
@@ -277,25 +290,80 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
         return;
     }
 
-    let pen = CreatePen(PS_SOLID, width, annotation.color);
-    let old_pen = SelectObject(hdc, pen);
-
     if semi_transparent {
-        // For highlighter, use R2_MASKPEN to simulate transparency
-        SetROP2(hdc, R2_MASKPEN);
-    }
+        // For highlighter, use AlphaBlend with a semi-transparent bitmap
+        // to achieve proper yellow highlight effect regardless of background
+        let min_x = annotation.points.iter().map(|p| p.x).min().unwrap() - width;
+        let min_y = annotation.points.iter().map(|p| p.y).min().unwrap() - width;
+        let max_x = annotation.points.iter().map(|p| p.x).max().unwrap() + width;
+        let max_y = annotation.points.iter().map(|p| p.y).max().unwrap() + width;
+        let region_w = max_x - min_x;
+        let region_h = max_y - min_y;
 
-    MoveToEx(hdc, annotation.points[0].x, annotation.points[0].y, None);
-    for point in &annotation.points[1..] {
-        LineTo(hdc, point.x, point.y);
-    }
+        if region_w <= 0 || region_h <= 0 {
+            return;
+        }
 
-    if semi_transparent {
-        SetROP2(hdc, R2_COPYPEN);
-    }
+        // Create a temporary DC and bitmap for the highlight stroke
+        let hdc_temp = CreateCompatibleDC(Some(hdc));
+        let hbm_temp = CreateCompatibleBitmap(hdc, region_w, region_h);
+        let old_bmp = SelectObject(hdc_temp, hbm_temp);
 
-    SelectObject(hdc, old_pen);
-    let _ = DeleteObject(pen);
+        // Fill with black (will be blended)
+        let black_brush = CreateSolidBrush(COLORREF(0x00000000));
+        let fill_rect = RECT { left: 0, top: 0, right: region_w, bottom: region_h };
+        FillRect(hdc_temp, &fill_rect, black_brush);
+        let _ = DeleteObject(black_brush);
+
+        // Draw the stroke on the temp DC
+        let pen = CreatePen(PS_SOLID, width, annotation.color);
+        let old_pen = SelectObject(hdc_temp, pen);
+
+        MoveToEx(hdc_temp, annotation.points[0].x - min_x, annotation.points[0].y - min_y, None);
+        for point in &annotation.points[1..] {
+            LineTo(hdc_temp, point.x - min_x, point.y - min_y);
+        }
+
+        SelectObject(hdc_temp, old_pen);
+        let _ = DeleteObject(pen);
+
+        // Alpha blend the highlight onto the main DC
+        let blend = BLENDFUNCTION {
+            BlendOp: 0, // AC_SRC_OVER
+            BlendFlags: 0,
+            SourceConstantAlpha: 100, // ~40% opacity for highlight effect
+            AlphaFormat: 0,
+        };
+
+        AlphaBlend(
+            hdc,
+            min_x,
+            min_y,
+            region_w,
+            region_h,
+            hdc_temp,
+            0,
+            0,
+            region_w,
+            region_h,
+            blend,
+        );
+
+        SelectObject(hdc_temp, old_bmp);
+        let _ = DeleteObject(hbm_temp);
+        let _ = DeleteDC(hdc_temp);
+    } else {
+        let pen = CreatePen(PS_SOLID, width, annotation.color);
+        let old_pen = SelectObject(hdc, pen);
+
+        MoveToEx(hdc, annotation.points[0].x, annotation.points[0].y, None);
+        for point in &annotation.points[1..] {
+            LineTo(hdc, point.x, point.y);
+        }
+
+        SelectObject(hdc, old_pen);
+        let _ = DeleteObject(pen);
+    }
 }
 
 /// Apply mosaic/pixelation effect to the rectangle defined by the annotation
@@ -312,23 +380,72 @@ unsafe fn render_mosaic(hdc: HDC, annotation: &Annotation) {
     let x2 = start.x.max(end.x);
     let y2 = start.y.max(end.y);
 
+    let region_w = x2 - x1;
+    let region_h = y2 - y1;
+
+    if region_w <= 0 || region_h <= 0 {
+        return;
+    }
+
     let block_size = 8;
 
-    // Pixelate: for each block, sample center pixel and fill the block
-    let mut y = y1;
-    while y < y2 {
-        let mut x = x1;
-        while x < x2 {
-            let cx = x + block_size / 2;
-            let cy = y + block_size / 2;
-            let color = GetPixel(hdc, cx, cy);
+    // Read the entire region into a buffer using GetDIBits for performance
+    let hdc_mem = CreateCompatibleDC(Some(hdc));
+    let hbm = CreateCompatibleBitmap(hdc, region_w, region_h);
+    let old_bmp = SelectObject(hdc_mem, hbm);
+
+    // Copy the region from the source HDC
+    BitBlt(hdc_mem, 0, 0, region_w, region_h, Some(hdc), x1, y1, SRCCOPY);
+
+    // Read pixels into a buffer
+    let mut bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: region_w,
+            biHeight: -region_h, // Top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut pixels = vec![0u8; (region_w * region_h * 4) as usize];
+    GetDIBits(
+        hdc_mem,
+        hbm,
+        0,
+        region_h as u32,
+        Some(pixels.as_mut_ptr() as *mut _),
+        &mut bmi,
+        DIB_RGB_COLORS,
+    );
+
+    // Pixelate: for each block, compute average color from the buffer
+    let stride = (region_w * 4) as usize;
+    let mut y = 0;
+    while y < region_h {
+        let mut x = 0;
+        while x < region_w {
+            let bw = block_size.min(region_w - x);
+            let bh = block_size.min(region_h - y);
+
+            // Sample the center pixel from the buffer
+            let cx = x + bw / 2;
+            let cy = y + bh / 2;
+            let offset = (cy as usize) * stride + (cx as usize) * 4;
+            let b = pixels[offset] as u32;
+            let g = pixels[offset + 1] as u32;
+            let r = pixels[offset + 2] as u32;
+            let color = COLORREF(b | (g << 8) | (r << 16));
 
             let brush = CreateSolidBrush(color);
             let block_rect = RECT {
-                left: x,
-                top: y,
-                right: (x + block_size).min(x2),
-                bottom: (y + block_size).min(y2),
+                left: x1 + x,
+                top: y1 + y,
+                right: x1 + x + bw,
+                bottom: y1 + y + bh,
             };
             FillRect(hdc, &block_rect, brush);
             let _ = DeleteObject(brush);
@@ -337,6 +454,10 @@ unsafe fn render_mosaic(hdc: HDC, annotation: &Annotation) {
         }
         y += block_size;
     }
+
+    SelectObject(hdc_mem, old_bmp);
+    let _ = DeleteObject(hbm);
+    let _ = DeleteDC(hdc_mem);
 }
 
 /// Render text annotation at the starting point
@@ -345,8 +466,22 @@ unsafe fn render_text(hdc: HDC, annotation: &Annotation) {
         return;
     }
 
-    let text = annotation.text.as_deref().unwrap_or("Text");
+    let text = match annotation.text.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return, // No text to render
+    };
     let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // Use a larger font for readability
+    let font = CreateFontW(
+        20, 0, 0, 0,
+        400, // FW_NORMAL
+        0, 0, 0,
+        0, // DEFAULT_CHARSET
+        0, 0, 0, 0,
+        windows::core::w!("Segoe UI"),
+    );
+    let old_font = SelectObject(hdc, font);
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, annotation.color);
@@ -358,4 +493,7 @@ unsafe fn render_text(hdc: HDC, annotation: &Annotation) {
         start.y,
         &text_wide[..text_wide.len() - 1],
     );
+
+    SelectObject(hdc, old_font);
+    let _ = DeleteObject(font);
 }

@@ -60,6 +60,7 @@ struct ToolbarState {
     current_color: COLORREF,
     pinned: bool,
     canvas_hwnd: HWND,
+    toolbar_hwnd: HWND,
 }
 
 /// Show the annotation toolbar and canvas for the captured region
@@ -89,6 +90,7 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             ..Default::default()
         };
 
+        // Attempt registration; ignore if class already exists
         RegisterClassExW(&wc_toolbar);
         RegisterClassExW(&wc_canvas);
 
@@ -136,7 +138,7 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
         )
         .expect("Failed to create toolbar window");
 
-        // Create shared state
+        // Create shared state - owned solely by this function scope
         let state = Box::new(ToolbarState {
             image_data,
             image_width: width,
@@ -146,10 +148,11 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             current_color: COLORREF(0x000000FF), // Red in BGR
             pinned: false,
             canvas_hwnd,
+            toolbar_hwnd,
         });
         let state_ptr = Box::into_raw(state);
 
-        // Store state in both windows
+        // Store state in both windows (neither window owns the allocation)
         SetWindowLongPtrW(toolbar_hwnd, GWLP_USERDATA, state_ptr as isize);
         SetWindowLongPtrW(canvas_hwnd, GWLP_USERDATA, state_ptr as isize);
 
@@ -168,10 +171,8 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             }
         }
 
-        // Cleanup state (only if not already freed)
-        if !state_ptr.is_null() {
-            let _ = Box::from_raw(state_ptr);
-        }
+        // Single ownership cleanup - only this scope frees the state
+        let _ = Box::from_raw(state_ptr);
     }
 }
 
@@ -192,6 +193,8 @@ unsafe extern "system" fn toolbar_wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            // Clear the user data pointer but do NOT free -- show_toolbar owns the allocation
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -224,6 +227,8 @@ unsafe extern "system" fn canvas_wnd_proc(
             LRESULT(0)
         }
         WM_DESTROY => {
+            // Clear the user data pointer but do NOT free -- show_toolbar owns the allocation
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -392,7 +397,9 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
             InvalidateRect(Some(state.canvas_hwnd), None, true);
         }
         BTN_CLOSE => {
-            DestroyWindow(state.canvas_hwnd).ok();
+            let canvas = state.canvas_hwnd;
+            // Destroy both windows; toolbar's WM_DESTROY will post quit
+            DestroyWindow(canvas).ok();
             DestroyWindow(hwnd).ok();
             return;
         }
@@ -476,7 +483,177 @@ unsafe fn handle_canvas_mouse_up(hwnd: HWND, lparam: LPARAM) {
     }
     let state = &mut *ptr;
 
-    state.annotation_engine.end_stroke(x, y);
+    if state.current_tool == AnnotationTool::Text {
+        // Prompt user for text input via a simple input dialog
+        let text = prompt_text_input(hwnd);
+        if let Some(text) = text {
+            if !text.is_empty() {
+                state.annotation_engine.end_stroke_with_text(x, y, text);
+            } else {
+                // Empty text - cancel the annotation
+                state.annotation_engine.end_stroke(x, y);
+            }
+        } else {
+            // User cancelled
+            state.annotation_engine.end_stroke(x, y);
+        }
+    } else {
+        state.annotation_engine.end_stroke(x, y);
+    }
+
     ReleaseCapture().ok();
     InvalidateRect(Some(hwnd), None, false);
+}
+
+/// Prompt the user for text input using a simple dialog with an edit control.
+/// Returns Some(text) if confirmed, None if cancelled.
+unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
+    use windows::Win32::UI::Controls::Dialogs::*;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+
+    // Use a simple approach: create a popup window with an edit control
+    let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)
+        .expect("Failed to get module handle");
+
+    let class_name = windows::core::w!("RustShotTextInputClass");
+
+    // Register class (ignore if already exists)
+    let wc = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        lpfnWndProc: Some(DefWindowProcW),
+        hInstance: instance.into(),
+        lpszClassName: class_name,
+        hbrBackground: GetStockObject(WHITE_BRUSH),
+        ..Default::default()
+    };
+    RegisterClassExW(&wc);
+
+    // Create a small dialog window
+    let dlg_width = 300;
+    let dlg_height = 120;
+    let screen_w = GetSystemMetrics(SM_CXSCREEN);
+    let screen_h = GetSystemMetrics(SM_CYSCREEN);
+    let dlg_x = (screen_w - dlg_width) / 2;
+    let dlg_y = (screen_h - dlg_height) / 2;
+
+    let dlg = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_DLGMODALFRAME,
+        class_name,
+        windows::core::w!("Enter Text"),
+        WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU,
+        dlg_x,
+        dlg_y,
+        dlg_width,
+        dlg_height,
+        Some(parent),
+        None,
+        Some(instance.into()),
+        None,
+    ).ok()?;
+
+    // Create edit control
+    let edit = CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        windows::core::w!("EDIT"),
+        windows::core::w!(""),
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(0x0080), // ES_AUTOHSCROLL
+        10,
+        10,
+        dlg_width - 20,
+        24,
+        Some(dlg),
+        None,
+        Some(instance.into()),
+        None,
+    ).ok()?;
+
+    // Create OK button
+    let _ok_btn = CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        windows::core::w!("BUTTON"),
+        windows::core::w!("OK"),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00010000), // BS_DEFPUSHBUTTON
+        dlg_width / 2 - 80,
+        50,
+        70,
+        28,
+        Some(dlg),
+        HMENU(1isize as *mut _),
+        Some(instance.into()),
+        None,
+    );
+
+    // Create Cancel button
+    let _cancel_btn = CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        windows::core::w!("BUTTON"),
+        windows::core::w!("Cancel"),
+        WS_CHILD | WS_VISIBLE,
+        dlg_width / 2 + 10,
+        50,
+        70,
+        28,
+        Some(dlg),
+        HMENU(2isize as *mut _),
+        Some(instance.into()),
+        None,
+    );
+
+    SetFocus(Some(edit));
+
+    // Run a modal message loop for this dialog
+    let mut result: Option<String> = None;
+    let mut msg = MSG::default();
+    loop {
+        let ret = GetMessageW(&mut msg, None, 0, 0);
+        if !ret.as_bool() {
+            break;
+        }
+
+        // Check for Enter key in the edit control or button clicks
+        if msg.message == WM_COMMAND {
+            let cmd_id = (msg.wparam.0 & 0xFFFF) as u32;
+            if cmd_id == 1 {
+                // OK pressed
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(edit, &mut buf);
+                let text = String::from_utf16_lossy(&buf[..len as usize]);
+                result = Some(text);
+                break;
+            } else if cmd_id == 2 {
+                // Cancel pressed
+                result = None;
+                break;
+            }
+        }
+
+        // Handle Enter/Escape keys
+        if msg.message == WM_KEYDOWN {
+            let key = msg.wparam.0 as u32;
+            if key == 0x0D {
+                // Enter - confirm
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(edit, &mut buf);
+                let text = String::from_utf16_lossy(&buf[..len as usize]);
+                result = Some(text);
+                break;
+            } else if key == 0x1B {
+                // Escape - cancel
+                result = None;
+                break;
+            }
+        }
+
+        // Check if dialog was closed
+        if !IsWindow(Some(dlg)).as_bool() {
+            result = None;
+            break;
+        }
+
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    DestroyWindow(dlg).ok();
+    result
 }

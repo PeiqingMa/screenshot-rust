@@ -3,6 +3,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
     MOD_SHIFT,
 };
+use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
 
 use crate::config::HotkeyBinding;
 use crate::WM_HOTKEY_CAPTURE;
@@ -37,10 +38,13 @@ impl HotkeyManager {
                 binding.key as u32,
             );
             if !result.as_bool() {
-                eprintln!(
-                    "Failed to register hotkey: {}. It may be in use by another application.",
+                let msg = format!(
+                    "Failed to register hotkey: {}.\nIt may be in use by another application.\0",
                     binding.description
                 );
+                let msg_wide: Vec<u16> = msg.encode_utf16().collect();
+                let title = windows::core::w!("RustShot - Hotkey Error");
+                MessageBoxW(Some(hwnd), windows::core::PCWSTR(msg_wide.as_ptr()), title, MB_OK | MB_ICONWARNING);
             }
         }
 
@@ -70,10 +74,13 @@ impl HotkeyManager {
                 binding.key as u32,
             );
             if !result.as_bool() {
-                eprintln!(
-                    "Failed to register hotkey: {}",
+                let msg = format!(
+                    "Failed to register hotkey: {}.\nIt may be in use by another application.\0",
                     binding.description
                 );
+                let msg_wide: Vec<u16> = msg.encode_utf16().collect();
+                let title = windows::core::w!("RustShot - Hotkey Error");
+                MessageBoxW(Some(self.hwnd), windows::core::PCWSTR(msg_wide.as_ptr()), title, MB_OK | MB_ICONWARNING);
             }
         }
     }

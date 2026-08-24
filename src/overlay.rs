@@ -75,7 +75,16 @@ pub fn show_overlay(capture: ScreenCapture) {
             ..Default::default()
         };
 
-        RegisterClassExW(&wc);
+        // Attempt to register the class; if it already exists, that is fine
+        let atom = RegisterClassExW(&wc);
+        if atom == 0 {
+            // Class already registered from a previous capture session - that is OK
+            let err = windows::core::Error::from_win32();
+            // ERROR_CLASS_ALREADY_EXISTS = 1410
+            if err.code().0 as u32 != 0x80070582 {
+                // Unexpected error - try to continue anyway
+            }
+        }
 
         // Create fullscreen layered window
         let hwnd = CreateWindowExW(
@@ -293,7 +302,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
                 sel.width as u32,
                 sel.height as u32,
                 sel.x,
-                height - sel.y - sel.height, // bottom-up source offset
+                sel.y, // top-down DIB: ySrc is offset from the top
                 0,
                 height as u32,
                 state.capture.pixels.as_ptr() as *const _,
