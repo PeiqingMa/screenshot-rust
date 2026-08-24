@@ -1,6 +1,7 @@
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::annotation::{AnnotationEngine, AnnotationTool};
@@ -86,7 +87,7 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             lpfnWndProc: Some(canvas_wnd_proc),
             hInstance: instance.into(),
             lpszClassName: canvas_class,
-            hCursor: LoadCursorW(None, IDC_CROSS).ok(),
+            hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
             ..Default::default()
         };
 
@@ -112,7 +113,7 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             height,
             None,
             None,
-            Some(instance.into()),
+            instance,
             None,
         )
         .expect("Failed to create canvas window");
@@ -133,7 +134,7 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             TOOLBAR_HEIGHT,
             None,
             None,
-            Some(instance.into()),
+            instance,
             None,
         )
         .expect("Failed to create toolbar window");
@@ -166,7 +167,7 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
             DispatchMessageW(&msg);
 
             // Break if both windows are destroyed
-            if !IsWindow(Some(toolbar_hwnd)).as_bool() && !IsWindow(Some(canvas_hwnd)).as_bool() {
+            if !IsWindow(toolbar_hwnd).as_bool() && !IsWindow(canvas_hwnd).as_bool() {
                 break;
             }
         }
@@ -390,11 +391,11 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
         BTN_TEXT => state.current_tool = AnnotationTool::Text,
         BTN_UNDO => {
             state.annotation_engine.undo();
-            InvalidateRect(Some(state.canvas_hwnd), None, true);
+            InvalidateRect(state.canvas_hwnd, None, BOOL::from(true));
         }
         BTN_REDO => {
             state.annotation_engine.redo();
-            InvalidateRect(Some(state.canvas_hwnd), None, true);
+            InvalidateRect(state.canvas_hwnd, None, BOOL::from(true));
         }
         BTN_CLOSE => {
             let canvas = state.canvas_hwnd;
@@ -437,7 +438,7 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
     }
 
     // Repaint toolbar to show active tool
-    InvalidateRect(Some(hwnd), None, true);
+    InvalidateRect(hwnd, None, BOOL::from(true));
 }
 
 /// Handle mouse down on canvas for drawing
@@ -452,7 +453,7 @@ unsafe fn handle_canvas_mouse_down(hwnd: HWND, lparam: LPARAM) {
     let state = &mut *ptr;
 
     state.annotation_engine.begin_stroke(state.current_tool, state.current_color, x, y);
-    let _ = SetCapture(hwnd);
+    SetCapture(hwnd);
 }
 
 /// Handle mouse move on canvas for drawing
@@ -468,7 +469,7 @@ unsafe fn handle_canvas_mouse_move(hwnd: HWND, lparam: LPARAM) {
 
     if state.annotation_engine.is_drawing() {
         state.annotation_engine.continue_stroke(x, y);
-        InvalidateRect(Some(hwnd), None, false);
+        InvalidateRect(hwnd, None, BOOL::from(false));
     }
 }
 
@@ -501,8 +502,8 @@ unsafe fn handle_canvas_mouse_up(hwnd: HWND, lparam: LPARAM) {
         state.annotation_engine.end_stroke(x, y);
     }
 
-    ReleaseCapture().ok();
-    InvalidateRect(Some(hwnd), None, false);
+    let _ = ReleaseCapture();
+    InvalidateRect(hwnd, None, BOOL::from(false));
 }
 
 /// User-defined message posted by the text dialog's wndproc when WM_COMMAND is received.
@@ -550,7 +551,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         lpfnWndProc: Some(text_dlg_wnd_proc),
         hInstance: instance.into(),
         lpszClassName: class_name,
-        hbrBackground: GetStockObject(WHITE_BRUSH),
+        hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
         ..Default::default()
     };
     // Ignore if already registered
@@ -573,9 +574,9 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         dlg_y,
         dlg_width,
         dlg_height,
-        Some(parent),
+        parent,
         None,
-        Some(instance.into()),
+        instance,
         None,
     ).ok()?;
 
@@ -589,9 +590,9 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         10,
         dlg_width - 20,
         24,
-        Some(dlg),
+        dlg,
         None,
-        Some(instance.into()),
+        instance,
         None,
     ).ok()?;
 
@@ -605,9 +606,9 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         50,
         70,
         28,
-        Some(dlg),
+        dlg,
         HMENU(1isize as *mut _),
-        Some(instance.into()),
+        instance,
         None,
     );
 
@@ -621,13 +622,13 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         50,
         70,
         28,
-        Some(dlg),
+        dlg,
         HMENU(2isize as *mut _),
-        Some(instance.into()),
+        instance,
         None,
     );
 
-    SetFocus(Some(edit));
+    let _ = SetFocus(edit);
 
     // Run a modal message loop for this dialog
     let mut result: Option<String> = None;
@@ -640,7 +641,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
 
         // Check for our user-defined message posted by the custom wndproc on button click
         if msg.message == WM_TEXT_DLG_COMMAND {
-            let ctrl_id = msg.wparam.0 as u32;
+            let ctrl_id = msg.wParam.0 as u32;
             if ctrl_id == 1 {
                 // OK pressed
                 let mut buf = [0u16; 512];
@@ -657,7 +658,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
 
         // Handle Enter/Escape keys
         if msg.message == WM_KEYDOWN {
-            let key = msg.wparam.0 as u32;
+            let key = msg.wParam.0 as u32;
             if key == 0x0D {
                 // Enter - confirm
                 let mut buf = [0u16; 512];
@@ -673,7 +674,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         }
 
         // Check if dialog was closed
-        if !IsWindow(Some(dlg)).as_bool() {
+        if !IsWindow(dlg).as_bool() {
             result = None;
             break;
         }

@@ -8,14 +8,14 @@ use windows::Win32::System::Ole::CF_DIB;
 pub fn copy_to_clipboard(pixels: &[u8], width: i32, height: i32) {
     unsafe {
         // Open clipboard
-        if !OpenClipboard(None).as_bool() {
+        if OpenClipboard(None).is_err() {
             eprintln!("Failed to open clipboard");
             return;
         }
 
         // Empty existing clipboard content
-        if !EmptyClipboard().as_bool() {
-            CloseClipboard().ok();
+        if EmptyClipboard().is_err() {
+            let _ = CloseClipboard();
             eprintln!("Failed to empty clipboard");
             return;
         }
@@ -28,7 +28,7 @@ pub fn copy_to_clipboard(pixels: &[u8], width: i32, height: i32) {
         // Allocate global memory for the DIB
         let hglobal = GlobalAlloc(GMEM_MOVEABLE, total_size);
         if hglobal.is_err() {
-            CloseClipboard().ok();
+            let _ = CloseClipboard();
             eprintln!("Failed to allocate global memory");
             return;
         }
@@ -37,7 +37,7 @@ pub fn copy_to_clipboard(pixels: &[u8], width: i32, height: i32) {
         let ptr = GlobalLock(hglobal) as *mut u8;
         if ptr.is_null() {
             GlobalFree(hglobal).ok();
-            CloseClipboard().ok();
+            let _ = CloseClipboard();
             eprintln!("Failed to lock global memory");
             return;
         }
@@ -76,6 +76,6 @@ pub fn copy_to_clipboard(pixels: &[u8], width: i32, height: i32) {
             eprintln!("Failed to set clipboard data");
         }
 
-        CloseClipboard().ok();
+        let _ = CloseClipboard();
     }
 }

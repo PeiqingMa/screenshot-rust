@@ -1,4 +1,3 @@
-use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -37,7 +36,7 @@ pub fn capture_screen() -> Option<ScreenCapture> {
         }
 
         // Create a compatible DC and bitmap
-        let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+        let hdc_mem = CreateCompatibleDC(hdc_screen);
         if hdc_mem.is_invalid() {
             ReleaseDC(None, hdc_screen);
             return None;
@@ -58,13 +57,13 @@ pub fn capture_screen() -> Option<ScreenCapture> {
             0,
             width,
             height,
-            Some(hdc_screen),
+            hdc_screen,
             x,
             y,
             SRCCOPY,
         );
 
-        if !success.as_bool() {
+        if success.is_err() {
             SelectObject(hdc_mem, old_bitmap);
             let _ = DeleteObject(hbitmap);
             let _ = DeleteDC(hdc_mem);

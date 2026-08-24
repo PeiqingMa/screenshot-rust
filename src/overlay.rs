@@ -1,6 +1,7 @@
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::capture::ScreenCapture;
@@ -71,7 +72,7 @@ pub fn show_overlay(capture: ScreenCapture) {
             lpfnWndProc: Some(overlay_wnd_proc),
             hInstance: instance.into(),
             lpszClassName: class_name,
-            hCursor: LoadCursorW(None, IDC_CROSS).ok(),
+            hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
             ..Default::default()
         };
 
@@ -98,7 +99,7 @@ pub fn show_overlay(capture: ScreenCapture) {
             capture.height,
             None,
             None,
-            Some(instance.into()),
+            instance,
             None,
         )
         .expect("Failed to create overlay window");
@@ -122,7 +123,7 @@ pub fn show_overlay(capture: ScreenCapture) {
         ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
         SetForegroundWindow(hwnd);
-        let _ = SetCapture(hwnd);
+        SetCapture(hwnd);
 
         // Local message loop for the overlay
         let mut msg = MSG::default();
@@ -134,7 +135,7 @@ pub fn show_overlay(capture: ScreenCapture) {
             DispatchMessageW(&msg);
 
             // Check if our window was destroyed
-            if !IsWindow(Some(hwnd)).as_bool() {
+            if !IsWindow(hwnd).as_bool() {
                 break;
             }
         }
@@ -191,7 +192,7 @@ unsafe extern "system" fn overlay_wnd_proc(
                 let _ = Box::from_raw(ptr);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
-            ReleaseCapture().ok();
+            let _ = ReleaseCapture();
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -215,12 +216,12 @@ unsafe fn paint_overlay(hwnd: HWND) {
     let height = state.capture.height;
 
     // Create memory DC with the screenshot
-    let hdc_mem = CreateCompatibleDC(Some(hdc));
+    let hdc_mem = CreateCompatibleDC(hdc);
     let hbitmap = CreateCompatibleBitmap(hdc, width, height);
     let old_bmp = SelectObject(hdc_mem, hbitmap);
 
     // Draw the captured screen image
-    let mut bmi = BITMAPINFO {
+    let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width,
@@ -259,7 +260,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
 
     // Draw semi-transparent dim by blending
     // We achieve dimming by drawing a dark rectangle with alpha blending
-    let hdc_dim = CreateCompatibleDC(Some(hdc_mem));
+    let hdc_dim = CreateCompatibleDC(hdc_mem);
     let hbm_dim = CreateCompatibleBitmap(hdc_mem, width, height);
     let old_dim = SelectObject(hdc_dim, hbm_dim);
     FillRect(hdc_dim, &full_rect, dim_brush);
@@ -337,7 +338,7 @@ unsafe fn paint_overlay(hwnd: HWND) {
     }
 
     // Copy from memory DC to screen
-    BitBlt(hdc, 0, 0, width, height, Some(hdc_mem), 0, 0, SRCCOPY);
+    let _ = BitBlt(hdc, 0, 0, width, height, hdc_mem, 0, 0, SRCCOPY);
 
     SelectObject(hdc_mem, old_bmp);
     let _ = DeleteObject(hbitmap);
@@ -558,7 +559,7 @@ unsafe fn cancel_overlay(hwnd: HWND) {
 
 /// Invalidate the entire overlay window to trigger repaint
 unsafe fn invalidate_window(hwnd: HWND) {
-    InvalidateRect(Some(hwnd), None, false);
+    InvalidateRect(hwnd, None, BOOL::from(false));
 }
 
 /// Hit-test which handle (if any) the mouse is over
@@ -659,7 +660,7 @@ fn update_cursor(handle: HandlePosition, sel: &SelectionRect, mx: i32, my: i32) 
             }
         };
         if let Ok(cursor) = LoadCursorW(None, cursor_id) {
-            SetCursor(Some(cursor));
+            SetCursor(cursor);
         }
     }
 }

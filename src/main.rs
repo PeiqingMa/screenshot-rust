@@ -72,7 +72,7 @@ fn create_main_window() -> HWND {
             0,
             None,
             None,
-            Some(instance.into()),
+            instance,
             None,
         )
         .expect("Failed to create main window");

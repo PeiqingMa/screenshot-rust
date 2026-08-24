@@ -32,19 +32,19 @@ impl HotkeyManager {
 
         unsafe {
             let result = RegisterHotKey(
-                Some(hwnd),
+                hwnd,
                 id as i32,
                 modifiers,
                 binding.key as u32,
             );
-            if !result.as_bool() {
+            if result.is_err() {
                 let msg = format!(
                     "Failed to register hotkey: {}.\nIt may be in use by another application.\0",
                     binding.description
                 );
                 let msg_wide: Vec<u16> = msg.encode_utf16().collect();
                 let title = windows::core::w!("RustShot - Hotkey Error");
-                MessageBoxW(Some(hwnd), windows::core::PCWSTR(msg_wide.as_ptr()), title, MB_OK | MB_ICONWARNING);
+                MessageBoxW(hwnd, windows::core::PCWSTR(msg_wide.as_ptr()), title, MB_OK | MB_ICONWARNING);
             }
         }
 
@@ -68,19 +68,19 @@ impl HotkeyManager {
 
         unsafe {
             let result = RegisterHotKey(
-                Some(self.hwnd),
+                self.hwnd,
                 self.id as i32,
                 modifiers,
                 binding.key as u32,
             );
-            if !result.as_bool() {
+            if result.is_err() {
                 let msg = format!(
                     "Failed to register hotkey: {}.\nIt may be in use by another application.\0",
                     binding.description
                 );
                 let msg_wide: Vec<u16> = msg.encode_utf16().collect();
                 let title = windows::core::w!("RustShot - Hotkey Error");
-                MessageBoxW(Some(self.hwnd), windows::core::PCWSTR(msg_wide.as_ptr()), title, MB_OK | MB_ICONWARNING);
+                MessageBoxW(self.hwnd, windows::core::PCWSTR(msg_wide.as_ptr()), title, MB_OK | MB_ICONWARNING);
             }
         }
     }
@@ -88,7 +88,7 @@ impl HotkeyManager {
     /// Unregister the global hotkey
     fn unregister(&self) {
         unsafe {
-            let _ = UnregisterHotKey(Some(self.hwnd), self.id as i32);
+            let _ = UnregisterHotKey(self.hwnd, self.id as i32);
         }
     }
 

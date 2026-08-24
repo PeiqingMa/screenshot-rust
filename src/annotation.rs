@@ -132,7 +132,7 @@ impl AnnotationEngine {
         unsafe {
             // Create a memory DC and bitmap to draw on
             let hdc_screen = GetDC(None);
-            let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+            let hdc_mem = CreateCompatibleDC(hdc_screen);
             let hbitmap = CreateCompatibleBitmap(hdc_screen, width, height);
             let old_bmp = SelectObject(hdc_mem, hbitmap);
 
@@ -307,14 +307,14 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
         }
 
         // Create a temporary DC and bitmap for the highlight stroke
-        let hdc_temp = CreateCompatibleDC(Some(hdc));
+        let hdc_temp = CreateCompatibleDC(hdc);
         let hbm_temp = CreateCompatibleBitmap(hdc, region_w, region_h);
         let old_bmp = SelectObject(hdc_temp, hbm_temp);
 
         // Copy the destination region into the temp bitmap first.
         // This ensures non-stroke pixels remain identical to the destination
         // after AlphaBlend, preventing any darkening around the stroke.
-        BitBlt(hdc_temp, 0, 0, region_w, region_h, Some(hdc), min_x, min_y, SRCCOPY);
+        let _ = BitBlt(hdc_temp, 0, 0, region_w, region_h, hdc, min_x, min_y, SRCCOPY);
 
         // Draw the stroke on the temp DC (on top of the copied destination pixels)
         let pen = CreatePen(PS_SOLID, width, annotation.color);
@@ -393,12 +393,12 @@ unsafe fn render_mosaic(hdc: HDC, annotation: &Annotation) {
     let block_size = 8;
 
     // Read the entire region into a buffer using GetDIBits for performance
-    let hdc_mem = CreateCompatibleDC(Some(hdc));
+    let hdc_mem = CreateCompatibleDC(hdc);
     let hbm = CreateCompatibleBitmap(hdc, region_w, region_h);
     let old_bmp = SelectObject(hdc_mem, hbm);
 
     // Copy the region from the source HDC
-    BitBlt(hdc_mem, 0, 0, region_w, region_h, Some(hdc), x1, y1, SRCCOPY);
+    let _ = BitBlt(hdc_mem, 0, 0, region_w, region_h, hdc, x1, y1, SRCCOPY);
 
     // Read pixels into a buffer
     let mut bmi = BITMAPINFO {
