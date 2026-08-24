@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -6,6 +8,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, Se
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::annotation::{AnnotationEngine, AnnotationTool};
+
+/// Flag to prevent re-entrant text dialog creation
+static TEXT_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
 /// Toolbar button IDs
 const BTN_RECTANGLE: u32 = 2001;
@@ -17,7 +22,6 @@ const BTN_TEXT: u32 = 2006;
 const BTN_UNDO: u32 = 2007;
 const BTN_REDO: u32 = 2008;
 const BTN_CLOSE: u32 = 2009;
-const BTN_PIN: u32 = 2010;
 const BTN_SAVE: u32 = 2011;
 const BTN_COPY: u32 = 2012;
 const BTN_COLOR: u32 = 2013;
@@ -41,7 +45,6 @@ const BUTTONS: &[ToolbarButton] = &[
     ToolbarButton { id: BTN_UNDO, label: "\u{21B6}", tooltip: "Undo" },
     ToolbarButton { id: BTN_REDO, label: "\u{21B7}", tooltip: "Redo" },
     ToolbarButton { id: BTN_CLOSE, label: "\u{2715}", tooltip: "Close" },
-    ToolbarButton { id: BTN_PIN, label: "\u{2299}", tooltip: "Pin to Screen" },
     ToolbarButton { id: BTN_SAVE, label: "\u{21E9}", tooltip: "Save" },
     ToolbarButton { id: BTN_COPY, label: "\u{29C9}", tooltip: "Copy" },
     ToolbarButton { id: BTN_COLOR, label: "\u{25CF}", tooltip: "Color Picker" },
@@ -61,7 +64,6 @@ struct ToolbarState {
     annotation_engine: AnnotationEngine,
     current_tool: AnnotationTool,
     current_color: COLORREF,
-    pinned: bool,
     canvas_hwnd: HWND,
     #[allow(dead_code)]
     toolbar_hwnd: HWND,
@@ -148,7 +150,6 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32, screen_x: i32,
             annotation_engine: AnnotationEngine::new(),
             current_tool: AnnotationTool::Rectangle,
             current_color: COLORREF(0x000000FF), // Red in BGR
-            pinned: false,
             canvas_hwnd,
             toolbar_hwnd,
         });
@@ -445,10 +446,6 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
             DestroyWindow(hwnd).ok();
             return;
         }
-        BTN_PIN => {
-            state.pinned = !state.pinned;
-            // Pin removes the toolbar and makes canvas always-on-top
-        }
         BTN_SAVE => {
             let final_image = state.annotation_engine.composite(
                 &state.image_data,
@@ -571,6 +568,11 @@ unsafe extern "system" fn text_dlg_wnd_proc(
             }
             LRESULT(0)
         }
+        WM_CLOSE => {
+            // X button clicked - treat as cancel
+            let _ = PostMessageW(hwnd, WM_TEXT_DLG_COMMAND, WPARAM(2), LPARAM(0));
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
@@ -579,6 +581,11 @@ unsafe extern "system" fn text_dlg_wnd_proc(
 /// Returns Some(text) if confirmed, None if cancelled.
 unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
     use windows::Win32::UI::WindowsAndMessaging::*;
+
+    // Prevent re-entrant dialogs
+    if TEXT_DIALOG_OPEN.swap(true, Ordering::SeqCst) {
+        return None;
+    }
 
     // Use a simple approach: create a popup window with an edit control
     let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)
@@ -619,7 +626,15 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         None,
         instance,
         None,
-    ).ok()?;
+    );
+
+    let dlg = match dlg.ok() {
+        Some(h) => h,
+        None => {
+            TEXT_DIALOG_OPEN.store(false, Ordering::SeqCst);
+            return None;
+        }
+    };
 
     // Create edit control with WS_TABSTOP for keyboard navigation
     let edit = CreateWindowExW(
@@ -635,9 +650,18 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         None,
         instance,
         None,
-    ).ok()?;
+    );
 
-    // Create OK button with WS_TABSTOP
+    let edit = match edit.ok() {
+        Some(h) => h,
+        None => {
+            DestroyWindow(dlg).ok();
+            TEXT_DIALOG_OPEN.store(false, Ordering::SeqCst);
+            return None;
+        }
+    };
+
+    // Create OK button with WS_TABSTOP - Control ID = 1
     let _ok_btn = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         windows::core::w!("BUTTON"),
@@ -653,7 +677,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         None,
     );
 
-    // Create Cancel button with WS_TABSTOP
+    // Create Cancel button with WS_TABSTOP - Control ID = 2
     let _cancel_btn = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         windows::core::w!("BUTTON"),
@@ -680,7 +704,8 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
             break;
         }
 
-        // Check for our user-defined message posted by the custom wndproc on button click
+        // Check for our user-defined message posted by the custom wndproc on button click.
+        // Must be checked BEFORE IsDialogMessageW to avoid the message being consumed.
         if msg.message == WM_TEXT_DLG_COMMAND {
             let ctrl_id = msg.wParam.0 as u32;
             if ctrl_id == 1 {
@@ -690,8 +715,8 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
                 let text = String::from_utf16_lossy(&buf[..len as usize]);
                 result = Some(text);
                 break;
-            } else if ctrl_id == 2 {
-                // Cancel pressed
+            } else {
+                // Cancel pressed (ctrl_id == 2)
                 result = None;
                 break;
             }
@@ -714,7 +739,7 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
             }
         }
 
-        // Check if dialog was closed
+        // Check if dialog was closed externally
         if !IsWindow(dlg).as_bool() {
             result = None;
             break;
@@ -730,5 +755,6 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
     }
 
     DestroyWindow(dlg).ok();
+    TEXT_DIALOG_OPEN.store(false, Ordering::SeqCst);
     result
 }
