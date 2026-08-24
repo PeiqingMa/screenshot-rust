@@ -123,7 +123,6 @@ pub fn show_overlay(capture: ScreenCapture) {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = UpdateWindow(hwnd);
         let _ = SetForegroundWindow(hwnd);
-        SetCapture(hwnd);
 
         // Local message loop for the overlay
         let mut msg = MSG::default();
@@ -192,7 +191,6 @@ unsafe extern "system" fn overlay_wnd_proc(
                 let _ = Box::from_raw(ptr);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
-            let _ = ReleaseCapture();
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -295,21 +293,43 @@ unsafe fn paint_overlay(hwnd: HWND) {
     // If there is a selection, draw the clear (undimmed) region
     if let Some(sel) = state.selection {
         if sel.width > 0 && sel.height > 0 {
-            // Restore the original screenshot pixels in the selected region
+            // Restore the original screenshot pixels in the selected region by
+            // blitting from a clean (undimmed) copy. This avoids the error-prone
+            // ySrc calculation that SetDIBitsToDevice requires for partial regions.
+            let hdc_clean = CreateCompatibleDC(hdc);
+            let hbm_clean = CreateCompatibleBitmap(hdc, width, height);
+            let old_clean = SelectObject(hdc_clean, hbm_clean);
+
             SetDIBitsToDevice(
-                hdc_mem,
-                sel.x,
-                sel.y,
-                sel.width as u32,
-                sel.height as u32,
-                sel.x,
-                sel.y, // top-down DIB: ySrc is offset from the top
+                hdc_clean,
+                0,
+                0,
+                width as u32,
+                height as u32,
+                0,
+                0,
                 0,
                 height as u32,
                 state.capture.pixels.as_ptr() as *const _,
                 &bmi,
                 DIB_RGB_COLORS,
             );
+
+            let _ = BitBlt(
+                hdc_mem,
+                sel.x,
+                sel.y,
+                sel.width,
+                sel.height,
+                hdc_clean,
+                sel.x,
+                sel.y,
+                SRCCOPY,
+            );
+
+            SelectObject(hdc_clean, old_clean);
+            let _ = DeleteObject(hbm_clean);
+            let _ = DeleteDC(hdc_clean);
 
             // Draw blue border around selection
             let blue_pen = CreatePen(PS_SOLID, 2, COLORREF(0x00FF8800)); // Blue in BGR
@@ -426,6 +446,10 @@ unsafe fn handle_mouse_down(hwnd: HWND, lparam: LPARAM) {
     let x = (lparam.0 & 0xFFFF) as i16 as i32;
     let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
 
+    // Capture mouse so we receive WM_MOUSEMOVE/WM_LBUTTONUP even if cursor
+    // leaves the window during the drag operation.
+    SetCapture(hwnd);
+
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OverlayState;
     if ptr.is_null() {
         return;
@@ -524,6 +548,9 @@ unsafe fn handle_mouse_up(hwnd: HWND, _lparam: LPARAM) {
     match state.mode {
         InteractionMode::Drawing | InteractionMode::Moving | InteractionMode::Resizing(_) => {
             state.mode = InteractionMode::Idle;
+            // Release mouse capture so cursor changes work on hover and other
+            // windows can receive input if the user clicks outside the overlay.
+            let _ = ReleaseCapture();
             invalidate_window(hwnd);
         }
         _ => {}

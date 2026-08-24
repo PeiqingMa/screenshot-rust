@@ -1,6 +1,8 @@
 use windows::Win32::Foundation::*;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::PCWSTR;
 
 use crate::WM_TRAY_ICON;
 
@@ -35,9 +37,19 @@ impl TrayIcon {
         let len = tip_wide.len().min(nid.szTip.len());
         nid.szTip[..len].copy_from_slice(&tip_wide[..len]);
 
-        // Load default application icon
+        // Load the embedded application icon from the exe resources (resource ID 1).
+        // Falls back to the generic application icon if loading fails.
         unsafe {
-            nid.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+            let instance = GetModuleHandleW(None).unwrap_or_default();
+            // MAKEINTRESOURCE(1): resource ID 1 encoded as a pointer value.
+            #[allow(clippy::manual_dangling_ptr)]
+            let resource_id = PCWSTR(1 as *const u16);
+            let icon = LoadIconW(instance, resource_id).unwrap_or_default();
+            nid.hIcon = if icon.is_invalid() {
+                LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
+            } else {
+                icon
+            };
             let _ = Shell_NotifyIconW(NIM_ADD, &nid);
         }
 

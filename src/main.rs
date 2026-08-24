@@ -27,6 +27,14 @@ pub const WM_TRAY_ICON: u32 = WM_USER + 1;
 pub const WM_HOTKEY_CAPTURE: u32 = 1;
 
 fn main() {
+    // Enable DPI awareness before any window or GDI calls.
+    // This is critical: without it Windows lies about screen dimensions and
+    // mouse coordinates on HiDPI displays, causing selection misalignment.
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::SetProcessDPIAware;
+        let _ = SetProcessDPIAware();
+    }
+
     // Load configuration
     let config = APP_CONFIG.lock().unwrap().clone();
 

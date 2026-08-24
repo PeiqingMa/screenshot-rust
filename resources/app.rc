@@ -1,0 +1,4 @@
+// Application icon - ID 1 is the default application icon shown in Explorer
+1 ICON "resources/icon.ico"
+// Named icon resource for runtime loading (tray icon)
+APP_ICON ICON "resources/icon.ico"
