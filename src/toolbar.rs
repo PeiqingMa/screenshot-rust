@@ -32,18 +32,18 @@ struct ToolbarButton {
 
 /// All toolbar buttons in order
 const BUTTONS: &[ToolbarButton] = &[
-    ToolbarButton { id: BTN_RECTANGLE, label: "\u{25AD}", tooltip: "Rectangle" },
-    ToolbarButton { id: BTN_ARROW, label: "\u{2191}", tooltip: "Arrow" },
-    ToolbarButton { id: BTN_PEN, label: "\u{270F}", tooltip: "Pen" },
-    ToolbarButton { id: BTN_HIGHLIGHTER, label: "\u{1F58C}", tooltip: "Highlighter" },
-    ToolbarButton { id: BTN_MOSAIC, label: "\u{2593}", tooltip: "Mosaic" },
+    ToolbarButton { id: BTN_RECTANGLE, label: "\u{25A1}", tooltip: "Rectangle" },
+    ToolbarButton { id: BTN_ARROW, label: "\u{2197}", tooltip: "Arrow" },
+    ToolbarButton { id: BTN_PEN, label: "\u{270E}", tooltip: "Pen" },
+    ToolbarButton { id: BTN_HIGHLIGHTER, label: "\u{2593}", tooltip: "Highlighter" },
+    ToolbarButton { id: BTN_MOSAIC, label: "\u{25A6}", tooltip: "Mosaic" },
     ToolbarButton { id: BTN_TEXT, label: "T", tooltip: "Text" },
     ToolbarButton { id: BTN_UNDO, label: "\u{21B6}", tooltip: "Undo" },
     ToolbarButton { id: BTN_REDO, label: "\u{21B7}", tooltip: "Redo" },
     ToolbarButton { id: BTN_CLOSE, label: "\u{2715}", tooltip: "Close" },
-    ToolbarButton { id: BTN_PIN, label: "\u{1F4CC}", tooltip: "Pin to Screen" },
-    ToolbarButton { id: BTN_SAVE, label: "\u{1F4BE}", tooltip: "Save" },
-    ToolbarButton { id: BTN_COPY, label: "\u{1F4CB}", tooltip: "Copy" },
+    ToolbarButton { id: BTN_PIN, label: "\u{2299}", tooltip: "Pin to Screen" },
+    ToolbarButton { id: BTN_SAVE, label: "\u{21E9}", tooltip: "Save" },
+    ToolbarButton { id: BTN_COPY, label: "\u{29C9}", tooltip: "Copy" },
     ToolbarButton { id: BTN_COLOR, label: "\u{25CF}", tooltip: "Color Picker" },
 ];
 
@@ -68,7 +68,7 @@ struct ToolbarState {
 }
 
 /// Show the annotation toolbar and canvas for the captured region
-pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
+pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32, screen_x: i32, screen_y: i32) {
     unsafe {
         let instance = GetModuleHandleW(None).expect("Failed to get module handle");
 
@@ -98,11 +98,9 @@ pub fn show_toolbar(image_data: Vec<u8>, width: i32, height: i32) {
         RegisterClassExW(&wc_toolbar);
         RegisterClassExW(&wc_canvas);
 
-        // Position the canvas and toolbar centered on screen
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let screen_height = GetSystemMetrics(SM_CYSCREEN);
-        let canvas_x = (screen_width - width) / 2;
-        let canvas_y = (screen_height - height - TOOLBAR_HEIGHT - 8) / 2;
+        // Position the canvas at the exact screen location where the selection was made
+        let canvas_x = screen_x;
+        let canvas_y = screen_y;
 
         // Create canvas window (shows the captured image + annotations)
         let canvas_hwnd = CreateWindowExW(
@@ -196,6 +194,20 @@ unsafe extern "system" fn toolbar_wnd_proc(
             handle_toolbar_click(hwnd, lparam);
             LRESULT(0)
         }
+        WM_KEYDOWN => {
+            let key = wparam.0 as u32;
+            if key == 0x1B {
+                // VK_ESCAPE - close toolbar and canvas
+                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+                if !ptr.is_null() {
+                    let state = &*ptr;
+                    let canvas = state.canvas_hwnd;
+                    DestroyWindow(canvas).ok();
+                    DestroyWindow(hwnd).ok();
+                }
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             // Clear the user data pointer but do NOT free -- show_toolbar owns the allocation
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -232,6 +244,20 @@ unsafe extern "system" fn canvas_wnd_proc(
             handle_canvas_mouse_up(hwnd, lparam);
             LRESULT(0)
         }
+        WM_KEYDOWN => {
+            let key = wparam.0 as u32;
+            if key == 0x1B {
+                // VK_ESCAPE - close canvas and toolbar
+                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ToolbarState;
+                if !ptr.is_null() {
+                    let state = &*ptr;
+                    let toolbar = state.toolbar_hwnd;
+                    DestroyWindow(hwnd).ok();
+                    DestroyWindow(toolbar).ok();
+                }
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             // Clear the user data pointer but do NOT free -- show_toolbar owns the allocation
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -258,6 +284,13 @@ unsafe fn paint_toolbar(hwnd: HWND) {
     // Draw buttons
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, COLORREF(0x00FFFFFF)); // White text
+
+    // Create a font that properly renders the Unicode symbols
+    let font = CreateFontW(
+        20, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0,
+        windows::core::w!("Segoe UI Symbol"),
+    );
+    let old_font = SelectObject(hdc, font);
 
     for (i, button) in BUTTONS.iter().enumerate() {
         let bx = TOOLBAR_PADDING + i as i32 * BTN_WIDTH;
@@ -318,6 +351,9 @@ unsafe fn paint_toolbar(hwnd: HWND) {
             let _ = state;
         }
     }
+
+    SelectObject(hdc, old_font);
+    let _ = DeleteObject(font);
 
     let _ = EndPaint(hwnd, &ps);
 }

@@ -592,11 +592,15 @@ unsafe fn confirm_selection(hwnd: HWND) {
             // Crop the selected region
             let cropped = crate::capture::crop_region(&state.capture, sel.x, sel.y, sel.width, sel.height);
 
+            // Calculate the screen position of the selection
+            let screen_x = state.capture.offset_x + sel.x;
+            let screen_y = state.capture.offset_y + sel.y;
+
             // Destroy the overlay
             DestroyWindow(hwnd).ok();
 
-            // Show the toolbar for annotation
-            toolbar::show_toolbar(cropped, sel.width, sel.height);
+            // Show the toolbar for annotation at the selection's screen position
+            toolbar::show_toolbar(cropped, sel.width, sel.height, screen_x, screen_y);
         }
     }
 }
