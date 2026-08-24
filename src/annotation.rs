@@ -291,8 +291,10 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
     }
 
     if semi_transparent {
-        // For highlighter, use AlphaBlend with a semi-transparent bitmap
-        // to achieve proper yellow highlight effect regardless of background
+        // For highlighter, use AlphaBlend with a semi-transparent bitmap.
+        // To avoid darkening non-stroke pixels, we first BitBlt the destination
+        // region into the temp bitmap, draw the stroke on top, then AlphaBlend
+        // back. Non-stroke pixels are identity-blended (dest with itself).
         let min_x = annotation.points.iter().map(|p| p.x).min().unwrap() - width;
         let min_y = annotation.points.iter().map(|p| p.y).min().unwrap() - width;
         let max_x = annotation.points.iter().map(|p| p.x).max().unwrap() + width;
@@ -309,13 +311,12 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
         let hbm_temp = CreateCompatibleBitmap(hdc, region_w, region_h);
         let old_bmp = SelectObject(hdc_temp, hbm_temp);
 
-        // Fill with black (will be blended)
-        let black_brush = CreateSolidBrush(COLORREF(0x00000000));
-        let fill_rect = RECT { left: 0, top: 0, right: region_w, bottom: region_h };
-        FillRect(hdc_temp, &fill_rect, black_brush);
-        let _ = DeleteObject(black_brush);
+        // Copy the destination region into the temp bitmap first.
+        // This ensures non-stroke pixels remain identical to the destination
+        // after AlphaBlend, preventing any darkening around the stroke.
+        BitBlt(hdc_temp, 0, 0, region_w, region_h, Some(hdc), min_x, min_y, SRCCOPY);
 
-        // Draw the stroke on the temp DC
+        // Draw the stroke on the temp DC (on top of the copied destination pixels)
         let pen = CreatePen(PS_SOLID, width, annotation.color);
         let old_pen = SelectObject(hdc_temp, pen);
 
@@ -327,7 +328,9 @@ unsafe fn render_freehand(hdc: HDC, annotation: &Annotation, width: i32, semi_tr
         SelectObject(hdc_temp, old_pen);
         let _ = DeleteObject(pen);
 
-        // Alpha blend the highlight onto the main DC
+        // Alpha blend the highlight onto the main DC.
+        // Non-stroke pixels: blend(dest, dest) = dest (identity).
+        // Stroke pixels: blend(dest, stroke_color) gives the highlight effect.
         let blend = BLENDFUNCTION {
             BlendOp: 0, // AC_SRC_OVER
             BlendFlags: 0,

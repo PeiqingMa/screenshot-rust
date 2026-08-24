@@ -505,10 +505,37 @@ unsafe fn handle_canvas_mouse_up(hwnd: HWND, lparam: LPARAM) {
     InvalidateRect(Some(hwnd), None, false);
 }
 
+/// User-defined message posted by the text dialog's wndproc when WM_COMMAND is received.
+/// WPARAM carries the control ID (1 = OK, 2 = Cancel).
+const WM_TEXT_DLG_COMMAND: u32 = WM_APP;
+
+/// Custom window procedure for the text input dialog.
+/// Handles WM_COMMAND from button clicks (sent synchronously by the button controls)
+/// and re-posts them as WM_APP so the modal message loop can see them.
+unsafe extern "system" fn text_dlg_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_COMMAND => {
+            let notification = ((wparam.0 >> 16) & 0xFFFF) as u32;
+            let ctrl_id = (wparam.0 & 0xFFFF) as u32;
+            // BN_CLICKED == 0
+            if notification == 0 && (ctrl_id == 1 || ctrl_id == 2) {
+                // Post a user message so the modal loop picks it up
+                let _ = PostMessageW(hwnd, WM_TEXT_DLG_COMMAND, WPARAM(ctrl_id as usize), LPARAM(0));
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
 /// Prompt the user for text input using a simple dialog with an edit control.
 /// Returns Some(text) if confirmed, None if cancelled.
 unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
-    use windows::Win32::UI::Controls::Dialogs::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     // Use a simple approach: create a popup window with an edit control
@@ -517,15 +544,16 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
 
     let class_name = windows::core::w!("RustShotTextInputClass");
 
-    // Register class (ignore if already exists)
+    // Register class with a custom wndproc that handles WM_COMMAND from buttons
     let wc = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        lpfnWndProc: Some(DefWindowProcW),
+        lpfnWndProc: Some(text_dlg_wnd_proc),
         hInstance: instance.into(),
         lpszClassName: class_name,
         hbrBackground: GetStockObject(WHITE_BRUSH),
         ..Default::default()
     };
+    // Ignore if already registered
     RegisterClassExW(&wc);
 
     // Create a small dialog window
@@ -551,12 +579,12 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         None,
     ).ok()?;
 
-    // Create edit control
+    // Create edit control with WS_TABSTOP for keyboard navigation
     let edit = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         windows::core::w!("EDIT"),
         windows::core::w!(""),
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WINDOW_STYLE(0x0080), // ES_AUTOHSCROLL
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | WINDOW_STYLE(0x0080), // ES_AUTOHSCROLL
         10,
         10,
         dlg_width - 20,
@@ -567,12 +595,12 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         None,
     ).ok()?;
 
-    // Create OK button
+    // Create OK button with WS_TABSTOP
     let _ok_btn = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         windows::core::w!("BUTTON"),
         windows::core::w!("OK"),
-        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x00010000), // BS_DEFPUSHBUTTON
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(0x00010000), // BS_DEFPUSHBUTTON
         dlg_width / 2 - 80,
         50,
         70,
@@ -583,12 +611,12 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         None,
     );
 
-    // Create Cancel button
+    // Create Cancel button with WS_TABSTOP
     let _cancel_btn = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         windows::core::w!("BUTTON"),
         windows::core::w!("Cancel"),
-        WS_CHILD | WS_VISIBLE,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
         dlg_width / 2 + 10,
         50,
         70,
@@ -610,17 +638,17 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
             break;
         }
 
-        // Check for Enter key in the edit control or button clicks
-        if msg.message == WM_COMMAND {
-            let cmd_id = (msg.wparam.0 & 0xFFFF) as u32;
-            if cmd_id == 1 {
+        // Check for our user-defined message posted by the custom wndproc on button click
+        if msg.message == WM_TEXT_DLG_COMMAND {
+            let ctrl_id = msg.wparam.0 as u32;
+            if ctrl_id == 1 {
                 // OK pressed
                 let mut buf = [0u16; 512];
                 let len = GetWindowTextW(edit, &mut buf);
                 let text = String::from_utf16_lossy(&buf[..len as usize]);
                 result = Some(text);
                 break;
-            } else if cmd_id == 2 {
+            } else if ctrl_id == 2 {
                 // Cancel pressed
                 result = None;
                 break;
@@ -648,6 +676,11 @@ unsafe fn prompt_text_input(parent: HWND) -> Option<String> {
         if !IsWindow(Some(dlg)).as_bool() {
             result = None;
             break;
+        }
+
+        // Use IsDialogMessage for Tab key navigation between controls
+        if IsDialogMessageW(dlg, &msg).as_bool() {
+            continue;
         }
 
         let _ = TranslateMessage(&msg);
