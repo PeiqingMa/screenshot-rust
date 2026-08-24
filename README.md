@@ -39,8 +39,8 @@ A lightweight, fast Windows screenshot tool built with Rust and the Win32 API.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rustshot.git
-cd rustshot
+git clone https://github.com/PeiqingMa/screenshot-rust.git
+cd screenshot-rust
 
 # Build in release mode
 cargo build --release
