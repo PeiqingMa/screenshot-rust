@@ -461,6 +461,11 @@ unsafe fn handle_toolbar_click(hwnd: HWND, lparam: LPARAM) {
                 state.image_height,
             );
             crate::clipboard::copy_to_clipboard(&final_image, state.image_width, state.image_height);
+            // Close the UI after copying
+            let canvas = state.canvas_hwnd;
+            DestroyWindow(canvas).ok();
+            DestroyWindow(hwnd).ok();
+            return;
         }
         BTN_COLOR => {
             // Cycle through common colors
